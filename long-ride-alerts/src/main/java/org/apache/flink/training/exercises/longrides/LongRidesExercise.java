@@ -18,6 +18,8 @@
 
 package org.apache.flink.training.exercises.longrides;
 
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.TimerService;
@@ -65,18 +67,44 @@ public class LongRidesExercise extends ExerciseBase {
 
 	public static class MatchFunction extends KeyedProcessFunction<Long, TaxiRide, TaxiRide> {
 
+		long twoHours = 2*60*60*1000;
+
+		private ValueState<TaxiRide> ridesStart;
+		private ValueState<TaxiRide> ridesEnd;
+
 		@Override
 		public void open(Configuration config) throws Exception {
-			throw new MissingSolutionException();
+			ridesStart = getRuntimeContext().getState(new ValueStateDescriptor<>("ride_starts", TaxiRide.class));
+			ridesEnd = getRuntimeContext().getState(new ValueStateDescriptor<>("ride_end", TaxiRide.class));
 		}
 
 		@Override
 		public void processElement(TaxiRide ride, Context context, Collector<TaxiRide> out) throws Exception {
 			TimerService timerService = context.timerService();
+
+			TaxiRide start = ridesStart.value();
+			TaxiRide end = ridesEnd.value();
+
+			// check if the ride is a start and no ride was stored before
+			if (start == null && ride.isStart && end == null) {
+				ridesStart.update(ride);
+				timerService.registerEventTimeTimer(ride.startTime.toEpochMilli() + twoHours);
+			}
+
+			// if ride end received we cancel the timer
+			if (!ride.isStart) {
+				if (start != null) {
+					timerService.deleteEventTimeTimer(ride.startTime.toEpochMilli() + twoHours);
+				} else {
+					ridesEnd.update(ride);
+				}
+			}
 		}
 
 		@Override
 		public void onTimer(long timestamp, OnTimerContext context, Collector<TaxiRide> out) throws Exception {
+			TaxiRide ride = ridesStart.value();
+			out.collect(ride);
 		}
 	}
 }

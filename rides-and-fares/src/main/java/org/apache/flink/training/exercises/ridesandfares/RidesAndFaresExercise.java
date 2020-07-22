@@ -18,6 +18,11 @@
 
 package org.apache.flink.training.exercises.ridesandfares;
 
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -70,17 +75,39 @@ public class RidesAndFaresExercise extends ExerciseBase {
 
 	public static class EnrichmentFunction extends RichCoFlatMapFunction<TaxiRide, TaxiFare, Tuple2<TaxiRide, TaxiFare>> {
 
+		private ValueState<TaxiRide> rides = null;
+		private ValueState<TaxiFare> fares = null;
+
 		@Override
 		public void open(Configuration config) throws Exception {
-			throw new MissingSolutionException();
+			ValueStateDescriptor<TaxiRide> rideDescriptor = new ValueStateDescriptor<>("rides", TaxiRide.class);
+			rides = getRuntimeContext().getState(rideDescriptor);
+
+			ValueStateDescriptor<TaxiFare> faresDescriptor = new ValueStateDescriptor<>("fares", TaxiFare.class);
+			fares = getRuntimeContext().getState(faresDescriptor);
 		}
 
 		@Override
 		public void flatMap1(TaxiRide ride, Collector<Tuple2<TaxiRide, TaxiFare>> out) throws Exception {
+			// if a corresponding fare event already is available, use this
+			if (fares.value() != null) {
+				// clean after populate
+				out.collect(new Tuple2<>(ride, fares.value()));
+				fares.clear();
+			} else if (ride.isStart) {
+				// else, save the ride till the corresponding fare arrives
+				rides.update(ride);
+			}
 		}
 
 		@Override
 		public void flatMap2(TaxiFare fare, Collector<Tuple2<TaxiRide, TaxiFare>> out) throws Exception {
+			if (rides.value() != null) {
+				out.collect(new Tuple2<>(rides.value(), fare));
+				rides.clear();
+			} else {
+				fares.update(fare);
+			}
 		}
 	}
 }
